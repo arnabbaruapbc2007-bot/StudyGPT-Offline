@@ -29,19 +29,67 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Install Android SDK
+      - name: Locate Android SDK
+        shell: bash
         run: |
-          export ANDROID_HOME=$ANDROID_SDK_ROOT
-          yes | sdkmanager --licenses
-          sdkmanager --install "platform-tools"
-          sdkmanager --install "platforms;android-35"
-          sdkmanager --install "build-tools;35.0.0"
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
 
-      - name: Build StudyGPT APK
-        run: gradle --no-daemon assembleDebug
+          SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" \
+            -type f -name sdkmanager 2>/dev/null \
+            | sort -V | tail -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found"
+            find "$SDK_ROOT" -maxdepth 5 -type f -name sdkmanager
+            exit 1
+          fi
+
+          echo "Found: $SDKMANAGER"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager | sort -V | tail -n 1)
+
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Extract project if ZIP uploaded
+        shell: bash
+        run: |
+          if [ -f "StudyGPT_Offline_Ready_to_Upload.zip" ]; then
+            unzip -oq StudyGPT_Offline_Ready_to_Upload.zip -d extracted
+          fi
+
+      - name: Find Android project
+        shell: bash
+        run: |
+          if [ -f "settings.gradle.kts" ]; then
+            PROJECT_DIR="$GITHUB_WORKSPACE"
+          elif [ -f "extracted/StudyGPT_Offline/settings.gradle.kts" ]; then
+            PROJECT_DIR="$GITHUB_WORKSPACE/extracted/StudyGPT_Offline"
+          else
+            echo "Android project files not found!"
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        run: |
+          cd "$PROJECT_DIR"
+          gradle --no-daemon assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: StudyGPT-Offline-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
